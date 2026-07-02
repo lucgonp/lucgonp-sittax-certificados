@@ -8,13 +8,13 @@ module.exports = defineConfig({
     defaultCommandTimeout: 12000,
     pageLoadTimeout: 45000,
     responseTimeout: 30000,
-    video: false,
+    video: true,
     screenshotOnRunFailure: true,
     retries: { runMode: 1, openMode: 0 },
     viewportWidth: 1440,
     viewportHeight: 900,
     experimentalMemoryManagement: true,
-    numTestsKeptInMemory: 1,
+    numTestsKeptInMemory: 5,
     // Credenciais NUNCA são versionadas. Defina via `cypress.env.json` (gitignored) ou
     // variáveis de ambiente CYPRESS_USER_LOGIN / CYPRESS_USER_PASSWORD.
     // Ver cypress.env.json.example.
