@@ -31,6 +31,33 @@ Credenciais (obrigatórias) via `cypress.env.json` (ver `cypress.env.json.exampl
 `CYPRESS_USER_LOGIN` / `CYPRESS_USER_PASSWORD`. `RUN_DESTRUCTIVE=1` habilita o teste que adiciona
 voucher ao carrinho — desligado por padrão para não gerar pedido/consumir saldo.
 
+## Arquitetura — Page Object Model (POM)
+
+Seletores e ações ficam encapsulados em **page objects**; os specs só orquestram cenários.
+
+```
+cypress/
+├── e2e/                      # specs (cenários) — só chamam os page objects
+│   ├── 01-auth.cy.js  02-dashboard.cy.js  03-navegacao.cy.js
+│   └── 04-carteira.cy.js  05-clientes.cy.js  06-carrinho.cy.js
+└── support/
+    ├── commands.js           # cy.login() (cy.session) — usa o LoginPage
+    └── pages/
+        ├── login.page.js        dashboard.page.js   carteira.page.js
+        ├── clientes.page.js     carrinho.page.js
+        └── nav.component.js     # menu principal (componente compartilhado)
+```
+
+Cada page object exporta uma instância com métodos **encadeáveis** (`return this`): ações
+(`logar`, `comprarVouchers`, `irParaClientes`…) e asserts (`deve...()`). Ex.:
+
+```js
+LoginPage.logar(user, pass);
+DashboardPage.deveEstarNaRota().deveMostrarKpis().deveMostrarComissao();
+NavMenu.irParaCarteira();
+CarteiraPage.deveEstarNaRota().deveMostrarCardsFinanceiros();
+```
+
 ## Cobertura (22 casos)
 
 - **01-auth** — login válido → /dashboard; senha inválida não autentica (sem cookie); campos
