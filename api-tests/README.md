@@ -6,6 +6,29 @@ contrato `openapi.yaml` usando `jest-openapi` (`toSatisfyApiSpec`), além de ass
 regra de negócio (envelope Sittax, teto de 30 atividades, 6 eventos de resumo financeiro,
 PIX recomendado, 401 em rota privada, 404/422 nos caminhos de erro etc.).
 
+## Arquitetura — camada de serviços (um service por recurso)
+
+Nenhuma chamada axios crua nos specs: cada recurso tem um **service** que encapsula os endpoints,
+e os specs só orquestram (`api.dashboard.overview()`, `api.carrinho.adicionarItem(...)`).
+
+```
+test/
+├── support/
+│   ├── client.js            # baseURL, .env loader, makeClient(token), init do jest-openapi
+│   ├── asserts.js           # expectEnvelopeOk / expectEnvelopeErro
+│   ├── api.js               # Api (agrega os services) + authApi() (login cacheado) / anonApi()
+│   └── services/
+│       ├── auth.service.js       dashboard.service.js   carteira.service.js
+│       ├── clientes.service.js   carrinho.service.js    certificados.service.js
+└── *.test.js                # specs — só orquestram os services
+```
+
+```js
+const { authApi, anonApi } = require('./support/api');
+const { api } = await authApi();            // login uma vez, reusa o token
+const res = await api.carteira.overview();  // service por recurso
+```
+
 ## Como rodar
 
 O `npx`/`jest` do Windows não roda em caminho UNC do WSL — invoque o node do WSL direto:

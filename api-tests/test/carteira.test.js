@@ -1,13 +1,14 @@
-const { login, expectEnvelopeOk, expectEnvelopeErro } = require('./helpers');
+const { authApi } = require('./support/api');
+const { expectEnvelopeOk, expectEnvelopeErro } = require('./support/asserts');
 
 describe('Carteira', () => {
-  let client;
+  let api;
   beforeAll(async () => {
-    ({ client } = await login());
+    ({ api } = await authApi());
   });
 
   test('GET /carteira/overview → 200 agregado no contrato', async () => {
-    const res = await client.get('/carteira/overview');
+    const res = await api.carteira.overview();
     expect(res.status).toBe(200);
     expectEnvelopeOk(res);
     expect(res).toSatisfyApiSpec();
@@ -16,42 +17,36 @@ describe('Carteira', () => {
   });
 
   test('POST /carteira/solicitacoes-certificados/listar (em andamento) → 200 grid', async () => {
-    const res = await client.post('/carteira/solicitacoes-certificados/listar', {
-      paginacao: { pageNumber: 1, pageSize: 10 },
-    });
+    const res = await api.carteira.listarSolicitacoes({ paginacao: { pageNumber: 1, pageSize: 10 } });
     expect(res.status).toBe(200);
     expectEnvelopeOk(res);
     expect(res).toSatisfyApiSpec();
   });
 
   test('POST /carteira/solicitacoes-certificados/listar?historico=true → 200 finalizadas', async () => {
-    const res = await client.post(
-      '/carteira/solicitacoes-certificados/listar',
+    const res = await api.carteira.listarSolicitacoes(
       { paginacao: { pageNumber: 1, pageSize: 10 } },
-      { params: { historico: true } },
+      { historico: true },
     );
     expect(res.status).toBe(200);
     expect(res).toSatisfyApiSpec();
   });
 
   test('GET /carteira/solicitacoes/{id} → 200 detalhe (id descoberto na listagem)', async () => {
-    const lista = await client.post('/carteira/solicitacoes-certificados/listar', {
-      paginacao: { pageNumber: 1, pageSize: 10 },
-    });
+    const lista = await api.carteira.listarSolicitacoes({ paginacao: { pageNumber: 1, pageSize: 10 } });
     const tuples = lista.data?.data?.dataSet?.tuples || [];
     if (!tuples.length) {
       console.warn('[carteira] sem solicitações para detalhar — pulando detalhe.');
       return;
     }
-    const id = tuples[0].id;
-    const res = await client.get(`/carteira/solicitacoes/${encodeURIComponent(id)}`);
+    const res = await api.carteira.solicitacao(tuples[0].id);
     expect(res.status).toBe(200);
     expectEnvelopeOk(res);
     expect(res).toSatisfyApiSpec();
   });
 
   test('GET /carteira/solicitacoes/{id} inexistente → 404 envelope de erro', async () => {
-    const res = await client.get('/carteira/solicitacoes/sc-inexistente-999');
+    const res = await api.carteira.solicitacao('sc-inexistente-999');
     expect(res.status).toBe(404);
     expectEnvelopeErro(res);
     expect(res).toSatisfyApiSpec();

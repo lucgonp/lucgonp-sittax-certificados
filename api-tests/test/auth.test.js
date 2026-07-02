@@ -1,13 +1,15 @@
-const { login, makeClient, expectEnvelopeOk, expectEnvelopeErro, CREDENTIALS } = require('./helpers');
+const { authApi, anonApi } = require('./support/api');
+const { expectEnvelopeOk, expectEnvelopeErro } = require('./support/asserts');
+const { CREDENTIALS } = require('./support/client');
 
 describe('Auth', () => {
   let ctx;
   beforeAll(async () => {
-    ctx = await login();
+    ctx = await authApi();
   });
 
   test('GET /health → 200 status ok (sem envelope)', async () => {
-    const res = await makeClient(null).get('/health');
+    const res = await anonApi().auth.health();
     expect(res.status).toBe(200);
     expect(res).toSatisfyApiSpec();
     expect(res.data.status).toBe('ok');
@@ -21,7 +23,7 @@ describe('Auth', () => {
   });
 
   test('POST /login com senha errada → 401/422 no envelope de erro', async () => {
-    const res = await makeClient(null).post('/login', {
+    const res = await anonApi().auth.login({
       login: CREDENTIALS.login,
       password: 'senha-errada-proposital',
     });
@@ -31,14 +33,14 @@ describe('Auth', () => {
   });
 
   test('GET /me → 200 claims do usuário autenticado', async () => {
-    const res = await ctx.client.get('/me');
+    const res = await ctx.api.auth.me();
     expect(res.status).toBe(200);
     expectEnvelopeOk(res);
     expect(res).toSatisfyApiSpec();
   });
 
   test('GET /me sem token → 401', async () => {
-    const res = await makeClient(null).get('/me');
+    const res = await anonApi().auth.me();
     expect(res.status).toBe(401);
     expect(res).toSatisfyApiSpec();
   });

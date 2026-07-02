@@ -1,6 +1,7 @@
-const { makeClient } = require('./helpers');
+const { anonApi } = require('./support/api');
 
-// Toda rota privada deve exigir autenticação (401 sem token).
+// Toda rota privada deve exigir autenticação (401 sem token). Varredura genérica por caminho —
+// usa o client anônimo exposto pela camada de serviços.
 const PROTECTED = [
   ['get', '/me'],
   ['get', '/dashboard/overview'],
@@ -24,9 +25,9 @@ const PROTECTED = [
 ];
 
 describe('Segurança — rotas privadas exigem token', () => {
-  const anon = makeClient(null);
+  const client = anonApi().client;
   test.each(PROTECTED)('%s %s sem token → 401', async (method, path) => {
-    const res = await anon[method](path);
+    const res = await client[method](path);
     expect(res.status).toBe(401);
     expect(res).toSatisfyApiSpec();
   });
