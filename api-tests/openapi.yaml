@@ -1,0 +1,1404 @@
+openapi: 3.0.3
+info:
+  title: Sittax Gestão de Certificado — API v1
+  description: >
+    Contrato canônico da API v1 (feature 005, rework 2026-06-12). Source of truth:
+    resorces/api/*.md (dashboard, carteira, clientes, carrinho, enum.md). Enums de domínio
+    na metodologia dominio.categoria.valor (snake_case). Todos os endpoints (exceto /health)
+    respondem no envelope padrão Sittax. Todas as rotas privadas aceitam o query param
+    opcional `escritorioId` (considerado apenas para usuários com nível > 2; abaixo disso o
+    escopo vem do JWT) e propagam o header `x-correlation-id`. O webhook GestaoOnline é
+    deliberadamente excluído desta documentação. Nesta fase os dados são exemplos (mocks);
+    validações profundas (senha de PFX, certificado vencido) estão
+    documentadas mas não são aplicadas pelos mocks — chegam com a persistência real.
+  version: 2.0.0
+servers:
+  - url: /v1
+tags:
+  - name: Auth
+  - name: Dashboard
+  - name: Carteira
+  - name: Clientes
+  - name: Carrinho
+  - name: Infra
+  - name: Gateway
+
+paths:
+  /health:
+    get:
+      tags: [Infra]
+      summary: Health check (sem envelope)
+      security: []
+      responses:
+        '200':
+          description: Serviço saudável
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /login:
+    post:
+      tags: [Auth]
+      summary: Autentica no SSO Sittax e emite o cookie/token JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [login, password]
+              properties:
+                login: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Autenticado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token: { type: string }
+                          primeiro_acesso: { type: boolean }
+                          usuario:
+                            type: object
+                            properties:
+                              id: { type: integer }
+                              nome: { type: string }
+                              sobrenome: { type: string }
+                              email: { type: string }
+                              nivel: { type: integer }
+                              role: { type: string }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Claims do usuário autenticado
+      responses:
+        '200':
+          description: Claims
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          IdDoUsuario: { type: integer }
+                          NomeDoUsuario: { type: string }
+                          Role: { type: string }
+                          RoleId: { type: integer }
+                          Nivel: { type: integer }
+                          Inadimplencia: { type: boolean }
+                          EscritorioCnpj: { type: string }
+                          EscritorioNome: { type: string }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /dashboard/overview:
+    get:
+      tags: [Dashboard]
+      summary: KPIs de certificados (novos, ativos, vencendo, vencidos)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/DashboardOverview' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /dashboard/commission:
+    get:
+      tags: [Dashboard]
+      summary: Saldo de comissão (card)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/Commission' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /dashboard/recent-activities:
+    get:
+      tags: [Dashboard]
+      summary: Atividades recentes (não paginado, teto 30, mais recentes primeiro)
+      parameters:
+        - { $ref: '#/components/parameters/EscritorioId' }
+        - name: status
+          in: query
+          required: false
+          description: Filtro por status (repetível)
+          schema:
+            type: array
+            items: { oneOf: [{ $ref: '#/components/schemas/PagamentoPedido' }, { $ref: '#/components/schemas/EmissaoPedido' }] }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+        - name: limit
+          in: query
+          required: false
+          description: Default e teto 30 (clamp acima do teto)
+          schema: { type: integer, default: 30, maximum: 30 }
+      responses:
+        '200': { $ref: '#/components/responses/RecentActivities' }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /dashboard/portfolio-distribution:
+    get:
+      tags: [Dashboard]
+      summary: Distribuição da carteira por tipo de certificado
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/PortfolioDistribution' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carteira/overview:
+    get:
+      tags: [Carteira]
+      summary: Agregado da carteira (totais, distribuição, resumo financeiro, vouchers)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/CarteiraOverview' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carteira/solicitacoes-certificados/listar:
+    post:
+      tags: [Carteira]
+      summary: Grid paginado de solicitações (POST por exceção de tabela)
+      parameters:
+        - { $ref: '#/components/parameters/EscritorioId' }
+        - name: historico
+          in: query
+          required: false
+          description: false/ausente = em andamento; true = finalizadas
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GridListRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/SolicitacoesGrid' }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carteira/solicitacoes/{solicitacaoId}:
+    get:
+      tags: [Carteira]
+      summary: Detalhe da solicitação (linha da listagem + timeline de steps)
+      parameters:
+        - { $ref: '#/components/parameters/SolicitacaoId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/SolicitacaoDetalhe' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /certificados/ler:
+    post:
+      tags: [Certificados]
+      summary: Ler e validar um certificado PFX/P12 (upload multipart) — read-only
+      description: >
+        Recebe o certificado (PFX/P12) e a senha por multipart/form-data. Sucesso = a senha abre o
+        certificado e os dados são legíveis. Não persiste nada; não valida validade temporal nem
+        cadeia ICP-Brasil (certificado expirado ainda retorna 200 com as datas). Senha incorreta /
+        PFX ilegível → 422; arquivo/senha ausentes ou arquivo > 5 MiB → 422.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [arquivo, senha]
+              properties:
+                arquivo: { type: string, format: binary, description: 'Certificado PFX/P12 (binário). Máx. 5 MiB.' }
+                senha: { type: string, format: password, description: 'Senha do certificado. Nunca é logada nem retornada.' }
+      responses:
+        '200':
+          description: Certificado lido com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DadosCertificado' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes:
+    post:
+      tags: [Clientes]
+      summary: Cadastrar cliente (PFX binário + dados flat — multipart/form-data)
+      description: >
+        Persistência real: upsert por (escritorio_id, cpf) — um CPF já existente no escritório
+        atualiza o cliente e devolve 201 (sem 409); o e-CPF é deduplicado pelo PFX. Demais:
+        senha inválida/PFX ilegível/cert vencido → 422; campo obrigatório ausente → 400.
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [arquivoPfx, senha, cpfCnpj, nomeRazaoSocial]
+              properties:
+                arquivoPfx: { type: string, format: binary, description: 'Certificado PFX (binário, não base64)' }
+                senha: { type: string, format: password }
+                cpfCnpj: { type: string, description: Apenas dígitos }
+                nomeRazaoSocial: { type: string }
+                email: { type: string, nullable: true }
+                telefone: { type: string, nullable: true, description: Apenas dígitos }
+                cep: { type: string, nullable: true, description: Apenas dígitos }
+                estadoUf: { type: string, nullable: true, example: SP }
+                cidade: { type: string, nullable: true }
+                bairro: { type: string, nullable: true }
+                logradouro: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Cliente criado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string, example: cl-99 }
+                          dataVencimento: { type: string, format: date, example: '2027-06-05' }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/overview:
+    get:
+      tags: [Clientes]
+      summary: Totais dos cards de clientes
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/ClientesOverview' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/listar:
+    post:
+      tags: [Clientes]
+      summary: Grid paginado de clientes (POST por exceção de tabela)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GridListRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/ClientesGrid' }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/{clienteId}:
+    get:
+      tags: [Clientes]
+      summary: Detalhe do cliente (identificação, renovação, certificado principal)
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/ClienteDetalhe' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+    patch:
+      tags: [Clientes]
+      summary: Atualiza APENAS dados do cliente (parcial) — sem empresa, sem certificado
+      description: >
+        Atualização parcial dos dados do cliente. Campos omitidos permanecem inalterados.
+        cpfCnpj é imutável. Qualquer campo de certificado (arquivoPfx/senha) ou de empresa
+        presente no corpo → 422 nomeando o campo (nunca ignorado silenciosamente). Corpo sem
+        campos reconhecidos → no-op 200 com o detalhe atual. Escopo por escritorio_id.
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nomeRazaoSocial: { type: string, maxLength: 255 }
+                email: { type: string, nullable: true, maxLength: 255 }
+                telefone: { type: string, nullable: true, maxLength: 255, description: Apenas dígitos }
+                cep: { type: string, nullable: true, maxLength: 255, description: Apenas dígitos }
+                estadoUf: { type: string, nullable: true, minLength: 2, maxLength: 2, example: SP }
+                cidade: { type: string, nullable: true, maxLength: 255 }
+                bairro: { type: string, nullable: true, maxLength: 255 }
+                logradouro: { type: string, nullable: true, maxLength: 255 }
+      responses:
+        '200': { $ref: '#/components/responses/ClienteDetalhe' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/{clienteId}/empresas:
+    get:
+      tags: [Clientes]
+      summary: Empresas atreladas ao cliente
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/ClienteEmpresas' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/{clienteId}/solicitacoes:
+    get:
+      tags: [Clientes]
+      summary: Solicitações do cliente com steps/eventos
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/ClienteSolicitacoes' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /clientes/{clienteId}/info:
+    get:
+      tags: [Clientes]
+      summary: Dados de contato do cliente
+      parameters:
+        - { $ref: '#/components/parameters/ClienteId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/ClienteInfo' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/catalogo:
+    get:
+      tags: [Carrinho]
+      summary: Catálogo — lista plana de SKUs (front agrupa por tipo)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200':
+          description: SKUs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/VoucherProduto' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho:
+    get:
+      tags: [Carrinho]
+      summary: Carrinho atual (server-side, recalculado)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200': { $ref: '#/components/responses/Carrinho' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/itens:
+    post:
+      tags: [Carrinho]
+      summary: Adicionar item — retorna o carrinho recalculado
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [produto_id, quantidade]
+              properties:
+                produto_id: { type: string, example: cpf-a3-36 }
+                quantidade: { type: integer, minimum: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/Carrinho' }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/itens/{itemId}:
+    delete:
+      tags: [Carrinho]
+      summary: Remover item — retorna o carrinho recalculado
+      parameters:
+        - { $ref: '#/components/parameters/ItemId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200': { $ref: '#/components/responses/Carrinho' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/metodos-pagamento:
+    get:
+      tags: [Carrinho]
+      summary: Métodos de pagamento (PIX sempre recomendado; parcelas só no crédito)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200':
+          description: Métodos
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/MetodoPagamentoItem' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/vouchers-carteira:
+    get:
+      tags: [Carrinho]
+      summary: Vouchers em carteira (documento = tipo, categoria = modelo, vigência = validade)
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200':
+          description: Vouchers
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          itens:
+                            type: array
+                            items: { $ref: '#/components/schemas/VoucherEmCarteira' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/vouchers-carteira/itens:
+    get:
+      tags: [Carrinho]
+      summary: Vouchers individuais disponíveis da carteira (com voucherId) — feature 015
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      responses:
+        '200':
+          description: Vouchers individuais disponíveis (omite consumidos)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          itens:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                voucher_id: { type: string }
+                                tipo: { $ref: '#/components/schemas/TipoCertificado' }
+                                modelo: { $ref: '#/components/schemas/ModeloCertificado' }
+                                validade: { $ref: '#/components/schemas/ValidadeCertificado' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/vouchers/{voucherId}/consumir:
+    post:
+      tags: [Carrinho]
+      summary: Consome um voucher da carteira → protocolo (id + URL) — feature 015
+      parameters:
+        - name: voucherId
+          in: path
+          required: true
+          schema: { type: string }
+          description: Id do voucher da carteira do Portal
+        - { $ref: '#/components/parameters/EscritorioId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tipo_solicitacao]
+              properties:
+                cliente_id: { type: string, nullable: true, description: 'Obrigatório p/ renovação; opcional p/ emissão (na emissão a solicitação roda sem cliente — o vínculo ocorre após emitir/importar o certificado). Quando informado, deve pertencer ao escritório.' }
+                empresa_id: { type: string, nullable: true, description: 'Voucher e-CNPJ: obrigatório p/ renovação, opcional p/ emissão; quando informado deve pertencer ao cliente_id.' }
+                tipo_solicitacao:
+                  type: string
+                  enum: [solicitacao.tipo.emissao, solicitacao.tipo.renovacao]
+                  description: 'Suportados: emissão e renovação. Revogação → 501.'
+      responses:
+        '200':
+          description: Protocolo (consumo bem-sucedido ou idempotente)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          solicitacao_id: { type: string, description: 'Id da solicitação criada (ou existente, no caminho idempotente). Use como {solicitacaoId} em GET /carteira/solicitacoes/{solicitacaoId} para acompanhar a solicitação.' }
+                          url_protocolo: { type: string, nullable: true }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '409': { $ref: '#/components/responses/ErroEnvelope' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+        '501': { $ref: '#/components/responses/ErroEnvelope' }
+        '503': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/checkout:
+    post:
+      tags: [Carrinho]
+      summary: Checkout — limpa o carrinho; PIX/débito → aprovado, crédito → processando
+      parameters: [{ $ref: '#/components/parameters/EscritorioId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metodo_pagamento]
+              properties:
+                metodo_pagamento: { $ref: '#/components/schemas/MetodoPagamento' }
+                parcelas: { type: integer, description: Obrigatório apenas para cartão de crédito; nos demais qualquer valor ≠ 1 → 400 }
+      responses:
+        '201':
+          description: Pedido iniciado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          pedido_id: { type: string }
+                          link_pagamento: { type: string, nullable: true }
+        '400': { $ref: '#/components/responses/ErroEnvelope' }
+        '422': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/pedidos/{pedidoId}:
+    get:
+      tags: [Carrinho]
+      summary: Resumo do pedido (snapshot do carrinho no checkout)
+      parameters:
+        - { $ref: '#/components/parameters/PedidoId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200':
+          description: Pedido
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PedidoResumo' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  /carrinho/pedidos/{pedidoId}/link-pagamento:
+    get:
+      tags: [Carrinho]
+      summary: Espera síncrona pelo link de pagamento (long-poll, feature 029)
+      description: >
+        Mantém a request aberta (bounded) até o link de pagamento do pedido ficar disponível e o
+        retorna. Único critério de sucesso: link presente, qualquer que seja o status do pedido.
+        Três desfechos: (200) link disponível — data.link_pagamento não-nulo; (200) ainda pendente —
+        data.link_pagamento nulo (limite de espera atingido; o cliente reemite a request); (409)
+        falha de registro — terminal, sem link. Somente-leitura: não altera o estado do pedido.
+      parameters:
+        - { $ref: '#/components/parameters/PedidoId' }
+        - { $ref: '#/components/parameters/EscritorioId' }
+      responses:
+        '200':
+          description: >
+            Link disponível (link_pagamento não-nulo) OU ainda pendente (link_pagamento nulo, status
+            pendente — reemitir).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LinkPagamentoEspera' }
+        # 409 = falha de registro (terminal); 404 = não encontrado / outro escritório.
+        '409': { $ref: '#/components/responses/ErroEnvelope' }
+        '404': { $ref: '#/components/responses/ErroEnvelope' }
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '403': { $ref: '#/components/responses/ErroEnvelope' }
+
+  # Gateway de Repasse (feature 016) — ÚNICA rota sem envelope: repassa ao serviço de destino e
+  # devolve a resposta byte-a-byte. OPTIONS de preflight é resolvido pelo CORS antes do gateway.
+  /gateway/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        description: >
+          Caminho remanescente após /v1/gateway, repassado integralmente ao serviço de destino
+          (pode conter múltiplos segmentos). Caminho vazio repassa à raiz do destino.
+        schema: { type: string }
+    get: &gateway
+      tags: [Gateway]
+      summary: Repasse transparente ao serviço de destino (sem envelope; resposta byte-a-byte)
+      description: >
+        Repassa método, caminho remanescente, query string, corpo e cabeçalhos relevantes ao
+        serviço de destino, injetando o JWT do chamador como Authorization: Bearer. Devolve a
+        resposta do destino byte-a-byte (status + corpo + content-type), SEM o envelope Sittax.
+        Exige autenticação; o preflight CORS é resolvido antes do gateway e não é repassado.
+      responses:
+        '200':
+          description: Resposta do destino repassada sem alteração (qualquer status do destino).
+          content:
+            '*/*': {}
+        '401': { $ref: '#/components/responses/ErroEnvelope' }
+        '502': { description: 'Erro de gateway — destino indisponível (envelope Sittax).' }
+        '504': { description: 'Erro de gateway — timeout ao aguardar o destino (envelope Sittax).' }
+    post: *gateway
+    put: *gateway
+    patch: *gateway
+    delete: *gateway
+    options: *gateway
+    head: *gateway
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT do SSO Sittax via header Authorization (feature 001)
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sittax_token
+      description: Mesmo JWT via cookie emitido pelo /login
+
+  parameters:
+    EscritorioId:
+      name: escritorioId
+      in: query
+      required: false
+      description: Escritório selecionado — considerado apenas para usuários com nível > 2; abaixo disso o escopo vem do JWT
+      schema: { type: string }
+    ClienteId:
+      name: clienteId
+      in: path
+      required: true
+      schema: { type: string }
+    SolicitacaoId:
+      name: solicitacaoId
+      in: path
+      required: true
+      schema: { type: string }
+    ItemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: string }
+    PedidoId:
+      name: pedidoId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    ErroEnvelope:
+      description: Erro no envelope padrão (ok=false, data=null, erros[] preenchido)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/EnvelopeErro' }
+    DashboardOverview:
+      description: KPIs
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      certificados_novos: { type: integer, example: 12 }
+                      certificados_ativos: { type: integer, example: 42 }
+                      certificados_expirando: { type: integer, example: 7 }
+                      certificados_expirados: { type: integer, example: 3 }
+                      ultima_atualizacao: { type: string, format: date-time, example: '2026-06-05T14:00:00Z' }
+    Commission:
+      description: Saldo
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      balance: { type: number, example: 2450 }
+                      currency: { type: string, example: BRL }
+    RecentActivities:
+      description: Atividades
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/RecentActivity' }
+                      total: { type: integer, example: 2 }
+    PortfolioDistribution:
+      description: Distribuição
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { $ref: '#/components/schemas/TipoCertificado' }
+                            quantity: { type: integer, example: 80 }
+    CarteiraOverview:
+      description: Agregado da carteira
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/CarteiraOverviewDto' }
+    SolicitacoesGrid:
+      description: Página de solicitações
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      dataSet:
+                        allOf:
+                          - $ref: '#/components/schemas/PaginatedDataSet'
+                          - type: object
+                            properties:
+                              tuples:
+                                type: array
+                                items: { $ref: '#/components/schemas/SolicitacaoCertificado' }
+                      hasFilter: { type: boolean }
+    SolicitacaoDetalhe:
+      description: 'Solicitação: contexto + timeline montada pela API (feature 035)'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string, example: sc-01 }
+                      tipo_solicitacao: { $ref: '#/components/schemas/TipoSolicitacao' }
+                      tipo_certificado: { $ref: '#/components/schemas/TipoCertificado' }
+                      modelo_certificado: { $ref: '#/components/schemas/ModeloCertificado' }
+                      validade: { $ref: '#/components/schemas/ValidadeCertificado' }
+                      data: { type: string, format: date, example: '2026-06-03' }
+                      status: { $ref: '#/components/schemas/StatusSolicitacao' }
+                      etapas:
+                        type: array
+                        items: { $ref: '#/components/schemas/Etapa' }
+                      detalhes_certificado:
+                        nullable: true
+                        description: Presente apenas quando emitido
+                        allOf: [{ $ref: '#/components/schemas/DetalhesCertificado' }]
+                      url_protocolo:
+                        type: string
+                        nullable: true
+                        description: 'URL da AR para prosseguir/acompanhar a emissão. Mesmo valor e mesma fonte de POST /carrinho/vouchers/{voucherId}/consumir. Null quando ainda não há protocolo; presente mesmo quando null.'
+    ClientesOverview:
+      description: Totais de clientes
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      totais:
+                        type: object
+                        properties:
+                          todos_clientes: { type: integer, example: 156 }
+                          totalizador:
+                            type: object
+                            properties:
+                              certificados_a1: { type: integer, example: 82 }
+                              certificados_a3: { type: integer, example: 74 }
+                          ecpf_a1: { $ref: '#/components/schemas/CertBucket' }
+                          ecpf_a3: { $ref: '#/components/schemas/CertBucket' }
+                          ecnpj_a1: { $ref: '#/components/schemas/CertBucket' }
+                          ecnpj_a3: { $ref: '#/components/schemas/CertBucket' }
+    ClientesGrid:
+      description: Página de clientes
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      dataSet:
+                        allOf:
+                          - $ref: '#/components/schemas/PaginatedDataSet'
+                          - type: object
+                            properties:
+                              tuples:
+                                type: array
+                                items: { $ref: '#/components/schemas/Cliente' }
+                      hasFilter: { type: boolean }
+    ClienteDetalhe:
+      description: Detalhe do cliente
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string, example: cl-01 }
+                      nome: { type: string }
+                      cpfCnpj: { type: string, description: Apenas dígitos }
+                      diasParaRenovacao: { type: integer, nullable: true, description: null = sem ciclo ativo }
+                      creditosDisponiveis: { type: integer }
+                      certificadoPrincipal:
+                        type: object
+                        nullable: true
+                        properties:
+                          tipo: { $ref: '#/components/schemas/ClienteCertificadoTipo' }
+                          modelo: { type: string, example: A3 (Cartão / Token) }
+                          acEmissora: { type: string, example: Certisign }
+                          vencimento: { type: string, format: date, nullable: true }
+                          status: { $ref: '#/components/schemas/SituacaoCertificado' }
+    ClienteEmpresas:
+      description: Empresas atreladas
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      empresas:
+                        type: array
+                        items: { $ref: '#/components/schemas/EmpresaAtrelada' }
+    ClienteSolicitacoes:
+      description: Solicitações do cliente
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      solicitacoes:
+                        type: array
+                        items: { $ref: '#/components/schemas/Solicitacao' }
+    ClienteInfo:
+      description: Contato
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      nome: { type: string }
+                      cpf: { type: string, description: Apenas dígitos }
+                      email: { type: string, nullable: true }
+                      telefone: { type: string, nullable: true, description: Apenas dígitos }
+    Carrinho:
+      description: Carrinho recalculado
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/CarrinhoDto' }
+
+  schemas:
+    DadosCertificado:
+      type: object
+      description: Dados seguros lidos do certificado (feature 036). Nunca inclui o binário nem a senha.
+      required: [documento, nome, tipo, acEmissora, emitidoEm, vencimento, cpfResponsavel]
+      properties:
+        documento: { type: string, description: 'CNPJ (e-CNPJ) ou CPF (e-CPF) do titular, só dígitos', example: '12345678000199' }
+        nome: { type: string, example: EMPRESA TESTE LTDA }
+        tipo: { type: string, description: 'Valor do enum TipoCertificado', example: certificado.tipo.e_cnpj }
+        acEmissora: { type: string, example: AC TESTE }
+        emitidoEm: { type: string, format: date, example: '2025-01-10' }
+        vencimento: { type: string, format: date, example: '2026-01-10' }
+        cpfResponsavel: { type: string, nullable: true, description: 'CPF do responsável (e-CNPJ); null para e-CPF', example: '98765432100' }
+    Envelope:
+      type: object
+      description: Envelope padrão Sittax (feature 002)
+      required: [ok, status, erros, data]
+      properties:
+        ok: { type: boolean, example: true }
+        status: { type: integer, example: 200 }
+        erros:
+          type: array
+          items: { $ref: '#/components/schemas/Erro' }
+
+    EnvelopeErro:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            ok: { type: boolean, example: false }
+            data: { nullable: true, example: null }
+
+    Erro:
+      type: object
+      properties:
+        tipo: { type: integer }
+        caminho: { type: string, nullable: true }
+        mensagem: { type: string }
+        campo: { type: string, nullable: true }
+        titulo: { type: string, nullable: true }
+        entidade: { type: string, nullable: true }
+        acao: { type: string, nullable: true }
+        metadados: { nullable: true }
+        detalhe: { type: string, nullable: true }
+        error_code: { type: string, example: '<ERR:7A3F9C2>', description: 'Código determinístico de rastreio (`<ERR:XXXXXXX>`, 7 hex maiúsculos), único por origem do erro (action + método HTTP + discriminador). O mapeamento código→origem é registrado no log para localizar onde ocorreu.' }
+
+    # ----- Enums de domínio (dominio.categoria.valor) -----
+    TipoCertificado:
+      type: string
+      enum: [certificado.tipo.e_cpf, certificado.tipo.e_cnpj]
+    ModeloCertificado:
+      type: string
+      enum: [certificado.modelo.a1, certificado.modelo.a3]
+    ValidadeCertificado:
+      type: string
+      enum: [certificado.validade.12_meses, certificado.validade.24_meses, certificado.validade.36_meses]
+    PagamentoPedido:
+      type: string
+      enum: [pedido.pagamento.pendente, pedido.pagamento.disponivel, pedido.pagamento.processando, pedido.pagamento.cancelado, pedido.pagamento.aprovado, pedido.pagamento.falha_registro]
+    EmissaoPedido:
+      type: string
+      enum:
+        - pedido.emissao.em_andamento
+        - pedido.emissao.concluido
+        - pedido.emissao.cancelado
+        - pedido.emissao.revogado
+        - pedido.emissao.recusado
+    MetodoPagamento:
+      type: string
+      enum: [pagamento.metodo.pix, pagamento.metodo.cartao_credito, pagamento.metodo.cartao_debito, pagamento.metodo.boleto]
+    SituacaoCertificado:
+      type: string
+      enum: [certificado.situacao.regular, certificado.situacao.a_vencer, certificado.situacao.vencido, certificado.situacao.revogado]
+    SituacaoSolicitacao:
+      type: string
+      enum: [solicitacao.situacao.em_andamento, solicitacao.situacao.emitido, solicitacao.situacao.cancelado, solicitacao.situacao.falhou]
+    TipoSolicitacao:
+      type: string
+      enum: [solicitacao.tipo.emissao, solicitacao.tipo.renovacao, solicitacao.tipo.revogacao]
+
+    # ----- Shared -----
+    GridListRequest:
+      type: object
+      description: Requisição padrão de grid (listagens)
+      properties:
+        paginacao:
+          type: object
+          properties:
+            pageNumber: { type: integer, default: 1 }
+            pageSize: { type: integer, default: 10 }
+            orderBy:
+              type: array
+              items: { type: string, example: dataAbertura desc }
+        search: { type: string, description: Busca livre }
+        where:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: {}
+          description: "Tripla [coluna|'*', modificador, termo] — ex.: ['*', 'contains', 'silva']"
+
+    PaginatedDataSet:
+      type: object
+      properties:
+        pageNumber: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 10 }
+        currentPageSize: { type: integer, example: 1 }
+        hasPrevious: { type: boolean, example: false }
+        hasNext: { type: boolean, example: false }
+        total: { type: integer, example: 1 }
+
+    CertBucket:
+      type: object
+      properties:
+        total: { type: integer, example: 54 }
+        a_vencer: { type: integer, example: 16 }
+        vencidos: { type: integer, example: 38 }
+
+    # ----- Dashboard -----
+    RecentActivity:
+      type: object
+      properties:
+        id: { type: string, example: '9' }
+        pedidoId: { type: string, nullable: true, description: 'Id do pedido quando a atividade é de pagamento (status pedido.pagamento.*); null caso contrário.' }
+        solicitacaoId: { type: string, nullable: true, description: 'Id da solicitação quando a atividade é de emissão (status pedido.emissao.*); null caso contrário.' }
+        certificateType: { $ref: '#/components/schemas/TipoCertificado' }
+        modelo: { $ref: '#/components/schemas/ModeloCertificado' }
+        personName: { type: string, example: Patrícia Mendes Rocha }
+        status: { oneOf: [{ $ref: '#/components/schemas/PagamentoPedido' }, { $ref: '#/components/schemas/EmissaoPedido' }] }
+        issuedAt: { type: string, format: date-time, description: Presente apenas quando emitido }
+
+    # ----- Carteira -----
+    CarteiraOverviewDto:
+      type: object
+      properties:
+        totais:
+          type: object
+          properties:
+            total_vendas: { type: number, example: 18200 }
+            comissoes_geradas: { type: number, example: 2730 }
+            aguardando_pagamento: { type: number, example: 450 }
+            certificados_vendidos: { type: integer, example: 28 }
+        distribuicao:
+          type: object
+          properties:
+            total_vouchers: { type: integer, example: 184 }
+            media_consumo_mes: { type: number, example: 121 }
+            items:
+              type: array
+              items:
+                type: object
+                properties:
+                  tipo: { $ref: '#/components/schemas/TipoCertificado' }
+                  quantidade: { type: integer, example: 80 }
+        resumo_financeiro:
+          type: object
+          description: >-
+            Vendas mensais dos últimos 6 meses (inclui o mês corrente) para o gráfico de barras, mais a
+            variação percentual do mês corrente vs. o mês anterior. `eventos` tem SEMPRE 6 entradas (uma por
+            mês), em ordem cronológica ascendente; meses sem venda vêm com valor 0. Cada valor usa a mesma
+            base de totais.total_vendas (soma dos pedidos do escritório), particionada por mês.
+          required: [eventos, variacao_percentual_mes]
+          properties:
+            eventos:
+              type: array
+              minItems: 6
+              maxItems: 6
+              items:
+                type: object
+                properties:
+                  data: { type: string, format: date, example: '2026-06-01' }
+                  valor: { type: number, example: 560 }
+            variacao_percentual_mes: { type: number, example: 100, description: 'Variação % do mês corrente vs. anterior; pode ser negativa. Mês anterior 0 → 100 se o corrente for positivo, senão 0.' }
+        vouchers_carteira:
+          type: object
+          properties:
+            grupos:
+              type: array
+              items:
+                type: object
+                properties:
+                  categoria: { $ref: '#/components/schemas/ModeloCertificado' }
+                  itens:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        documento: { $ref: '#/components/schemas/TipoCertificado' }
+                        vigencia: { $ref: '#/components/schemas/ValidadeCertificado' }
+                        quantidade: { type: integer, example: 10 }
+
+    SolicitacaoCertificado:
+      type: object
+      properties:
+        id: { type: string, example: sc-01 }
+        protocolo: { type: string, example: AZ8aFeBtd0KfvEpwkvUDwg, description: 'Identificador AUID da solicitação (gerado localmente).' }
+        solicitanteNome: { type: string, example: Mateus Barbosa Lima }
+        solicitanteCpfCnpj: { type: string, example: '89574230001', description: Apenas dígitos }
+        dataAbertura: { type: string, format: date, example: '2026-03-04' }
+        tipoCertificado: { $ref: '#/components/schemas/TipoCertificado' }
+        modeloCertificado: { $ref: '#/components/schemas/ModeloCertificado' }
+        validadeCertificado: { $ref: '#/components/schemas/ValidadeCertificado' }
+        status: { $ref: '#/components/schemas/EmissaoPedido' }
+
+    EtapaSolicitacao:
+      type: string
+      description: Chave canônica da etapa (feature 035)
+      enum: [solicitacao.etapa.solicitacao_criada, solicitacao.etapa.validacao_video, solicitacao.etapa.finalizacao]
+    EstadoEtapa:
+      type: string
+      enum: [solicitacao.etapa_estado.concluida, solicitacao.etapa_estado.em_andamento, solicitacao.etapa_estado.pendente, solicitacao.etapa_estado.cancelada]
+    EstadoEvento:
+      type: string
+      enum: [solicitacao.evento_estado.concluido, solicitacao.evento_estado.em_avaliacao, solicitacao.evento_estado.pendente, solicitacao.evento_estado.cancelado]
+    StatusSolicitacao:
+      type: string
+      enum: [solicitacao.status.emitido, solicitacao.status.cancelado, solicitacao.status.em_andamento]
+    DetalhesCertificado:
+      type: object
+      description: Detalhes do certificado emitido (feature 035)
+      properties:
+        certificado: { type: string, example: 'e-CNPJ A3' }
+        emitido_em: { type: string, format: date, example: '2026-06-03' }
+        validade: { type: string, format: date, example: '2029-06-03' }
+        data_solicitacao: { type: string, format: date, example: '2026-06-03' }
+        solicitante: { type: string, example: 'Bruno Test' }
+        protocolo: { type: string, example: C9843098ADJOX }
+    Etapa:
+      type: object
+      description: Etapa da timeline montada pela API (feature 035)
+      properties:
+        ordem: { type: integer, example: 1 }
+        chave: { $ref: '#/components/schemas/EtapaSolicitacao' }
+        titulo: { type: string, example: Solicitação criada }
+        descricao: { type: string, example: 'Processo de emissão — link gerado.' }
+        estado: { $ref: '#/components/schemas/EstadoEtapa' }
+        eventos:
+          type: array
+          items:
+            type: object
+            properties:
+              titulo: { type: string, example: Voucher consumido }
+              detalhe: { type: string, nullable: true, example: 'Protocolo: C9843098ADJOX' }
+              estado: { $ref: '#/components/schemas/EstadoEvento' }
+
+    # ----- Clientes -----
+    ClienteCertificadoTipo:
+      type: object
+      description: Tipo + modelo do certificado (objeto)
+      properties:
+        tipo: { $ref: '#/components/schemas/TipoCertificado' }
+        modelo: { $ref: '#/components/schemas/ModeloCertificado' }
+
+    Cliente:
+      type: object
+      description: >
+        Linha do grid de clientes — granular POR CERTIFICADO (D-073): uma linha por certificado.
+        `id` é o cliente dono (abre GET /clientes/{id}); `idCertificado` é o certificado da linha.
+      properties:
+        id: { type: string, example: cl-01, description: Cliente dono (e-CPF → cliente; e-CNPJ → cliente da empresa) }
+        idCertificado: { type: string, example: cert-cl01-ecpf, description: Certificado desta linha (único por tupla) }
+        nome: { type: string, example: João Coutinho }
+        cpf: { type: string, example: '12345678909', description: Apenas dígitos }
+        empresaNome: { type: string, example: '', description: 'Empresa atrelada; "" em linhas e-CPF' }
+        empresaCnpj: { type: string, example: '', description: 'Apenas dígitos; "" em linhas e-CPF' }
+        tipoCertificado: { $ref: '#/components/schemas/TipoCertificado' }
+        modeloCertificado: { $ref: '#/components/schemas/ModeloCertificado' }
+        status: { $ref: '#/components/schemas/SituacaoCertificado' }
+
+    EmpresaAtrelada:
+      type: object
+      properties:
+        id: { type: string, example: e-02 }
+        nome: { type: string, example: Alpha LTDA }
+        cnpjCpf: { type: string, example: '74239681002356', description: Apenas dígitos }
+        tipoCertificado: { $ref: '#/components/schemas/ClienteCertificadoTipo' }
+        status: { $ref: '#/components/schemas/SituacaoCertificado' }
+        diasParaVencer: { type: integer, nullable: true, example: 10 }
+        vencimento: { type: string, format: date, nullable: true, example: '2026-06-07' }
+
+    Solicitacao:
+      type: object
+      description: 'Solicitação do cliente (feature 035): timeline `etapas`, `status` e `detalhes_certificado` unificados (DT-09/DT-10).'
+      properties:
+        id: { type: string, example: sol-01 }
+        tipoSolicitacao: { $ref: '#/components/schemas/TipoSolicitacao' }
+        tipoCertificado: { $ref: '#/components/schemas/ClienteCertificadoTipo' }
+        data: { type: string, format: date, example: '2025-12-03' }
+        status: { $ref: '#/components/schemas/StatusSolicitacao' }
+        detalhes_certificado:
+          nullable: true
+          description: Presente apenas quando emitido
+          allOf: [{ $ref: '#/components/schemas/DetalhesCertificado' }]
+        etapas:
+          type: array
+          items: { $ref: '#/components/schemas/Etapa' }
+
+    # ----- Carrinho -----
+    VoucherProduto:
+      type: object
+      description: Um SKU de certificado (lista plana; front agrupa por tipo)
+      properties:
+        id: { type: string, example: cpf-a1-12 }
+        tipo_certificado: { $ref: '#/components/schemas/TipoCertificado' }
+        modelo: { $ref: '#/components/schemas/ModeloCertificado' }
+        validade: { $ref: '#/components/schemas/ValidadeCertificado' }
+        preco_unitario: { type: number, example: 120 }
+
+    CarrinhoDto:
+      type: object
+      properties:
+        id: { type: string, example: cart-1 }
+        itens:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, example: item-1 }
+              produto_id: { type: string, example: cnpj-a1-12 }
+              tipo_certificado: { $ref: '#/components/schemas/TipoCertificado' }
+              modelo: { $ref: '#/components/schemas/ModeloCertificado' }
+              validade: { $ref: '#/components/schemas/ValidadeCertificado' }
+              preco_unitario: { type: number, example: 220 }
+              quantidade: { type: integer, example: 10 }
+              subtotal: { type: number, example: 2200 }
+        totais:
+          type: object
+          properties:
+            subtotal: { type: number, example: 2200 }
+            desconto: { type: number, example: 0 }
+            total: { type: number, example: 2200 }
+
+    MetodoPagamentoItem:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/MetodoPagamento' }
+        parcelas_disponiveis:
+          type: array
+          items: { type: integer }
+          example: [1, 2, 3, 4, 5, 6]
+        recomendado: { type: boolean, description: Fixo no PIX }
+        habilitado: { type: boolean, description: Boleto desabilitado hoje }
+
+    VoucherEmCarteira:
+      type: object
+      properties:
+        documento: { $ref: '#/components/schemas/TipoCertificado' }
+        categoria: { $ref: '#/components/schemas/ModeloCertificado' }
+        vigencia: { $ref: '#/components/schemas/ValidadeCertificado' }
+        quantidade: { type: integer, example: 8 }
+
+    PedidoResumo:
+      type: object
+      properties:
+        id: { type: string }
+        status: { $ref: '#/components/schemas/PagamentoPedido' }
+        metodo_pagamento: { $ref: '#/components/schemas/MetodoPagamento' }
+        parcelas: { type: integer, example: 1 }
+        criado_em: { type: string, format: date-time }
+        link_pagamento: { type: string, nullable: true }
+        carrinho: { $ref: '#/components/schemas/CarrinhoDto' }
+
+    LinkPagamentoEspera:
+      type: object
+      description: Resultado da espera síncrona pelo link de pagamento (feature 029).
+      required: [status, link_pagamento]
+      properties:
+        status: { $ref: '#/components/schemas/PagamentoPedido' }
+        link_pagamento:
+          type: string
+          nullable: true
+          description: >
+            URL do portal (302 → AR) quando disponível; null quando ainda pendente. Mesmo valor que
+            o resumo do pedido exporia.

@@ -1,0 +1,20 @@
+# deps
+node_modules/
+package-lock.json
+
+# credenciais — NUNCA versionar
+.env
+**/.env
+cypress.env.json
+**/cypress.env.json
+
+# artefatos de execução / descoberta
+cypress/videos/
+cypress/screenshots/
+cypress/dom/
+cypress/downloads/
+*.log
+
+# SO
+.DS_Store
+Thumbs.db

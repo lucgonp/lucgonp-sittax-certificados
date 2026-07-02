@@ -1,0 +1,14 @@
+{
+  "name": "sittax-certificados-test",
+  "version": "1.0.0",
+  "description": "Testes de integração da API Sittax Gestão de Certificado v1 (contrato openapi.yaml)",
+  "type": "commonjs",
+  "scripts": {
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "jest": "^29.7.0",
+    "jest-openapi": "^0.14.2"
+  }
+}
